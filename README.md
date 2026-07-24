@@ -1,4 +1,247 @@
-# 🛒 Desafio Técnico: Módulo Fiscal & ERP Varejo
+# Solução desenvolvida
+
+## Visão geral
+
+Esta aplicação implementa a solução para o desafio técnico descrito abaixo. Ela oferece:
+
+- autenticação via **JWT**, com usuários previamente cadastrados na inicialização da aplicação;
+- endpoint protegido para **validação fiscal** de notas com múltiplos itens;
+- cálculo de **ICMS, PIS e COFINS** conforme a categoria do produto e o fluxo de origem/destino;
+- identificação e detalhamento de **divergências** entre os impostos informados e os calculados;
+- **tolerância de R$ 0,02** por imposto, aplicada individualmente a cada item;
+- suíte de **testes automatizados** cobrindo calculadoras, serviço de validação, controllers e tratamento de erros.
+
+## Tecnologias
+
+Versões reais utilizadas, conforme `pom.xml` e `.mvn/wrapper/maven-wrapper.properties`:
+
+- **Java** 17
+- **Spring Boot** 4.0.7
+- **Spring Web** (`spring-boot-starter-webmvc`, `spring-boot-starter-webmvc-test`)
+- **Spring Security** (`spring-boot-starter-security`)
+- **Spring Data JPA** (`spring-boot-starter-data-jpa`)
+- **H2 Database** (em memória, via `spring-boot-h2console`)
+- **JJWT** 0.13.0 (`jjwt-api`, `jjwt-impl`, `jjwt-jackson`)
+- **JUnit 5** (JUnit Jupiter, via `spring-boot-starter-test`)
+- **Maven** 3.9.16 (via Maven Wrapper)
+- **Swagger/OpenAPI**: `springdoc-openapi-starter-webmvc-ui` 3.0.3
+
+## Arquitetura
+
+O código é organizado por módulo de domínio, dentro de `br.com.irrah.fiscal`:
+
+- **`auth`**: controller, DTOs e serviço de autenticação (`POST /api/auth/login`), responsável por validar credenciais e emitir o token JWT.
+- **`security`**: geração e validação do JWT (`JwtService`) e o filtro que autentica cada requisição (`JwtAuthenticationFilter`).
+- **`usuario`**: entidade `Usuario`, enum `Perfil` e o repositório JPA usado pela autenticação.
+- **`fiscal`**: regras e validações fiscais — DTOs de entrada/saída, domínio (`CategoriaProduto`, `TipoImposto`, `StatusValidacao`), o `ValidacaoFiscalService` (orquestra o cálculo por item) e o `FiscalController` (`POST /api/fiscal/validar-nota`).
+- **`fiscal.calculator`**: estratégias de cálculo de cada imposto (`CalculadoraIcms`, `CalculadoraPis`, `CalculadoraCofins`), todas implementando a interface `CalculadoraImposto`.
+- **`exception`**: tratamento global de erros da API (`GlobalExceptionHandler`) e o formato padronizado de resposta de erro (`ErroResponse`).
+- **`config`**: configurações gerais — segurança (`SecurityConfig`), carga inicial de usuários (`DataInitializer`) e documentação da API (`OpenApiConfig`).
+
+O padrão **Strategy** foi aplicado no cálculo dos impostos: `ValidacaoFiscalService` recebe `List<CalculadoraImposto>` por injeção de construtor e executa cada calculadora sem conhecer sua lógica interna. Isso separa a regra de cada imposto em uma classe própria e permite adicionar um novo imposto sem alterar o serviço existente.
+
+## Regras fiscais implementadas
+
+**Base de cálculo por item:**
+```
+base = (quantidade × valor unitário) − desconto
+```
+
+**ICMS:**
+- mesma UF (origem = destino): **18%**;
+- UFs diferentes: **12%**;
+- categoria `CESTA_BASICA`: **0%** (isenta).
+
+**PIS:**
+- padrão: **1,65%**;
+- categoria `BEBIDAS_ALCOOLICAS`: **0%** (regime monofásico).
+
+**COFINS:**
+- padrão: **7,60%**;
+- categoria `BEBIDAS_ALCOOLICAS`: **0%** (regime monofásico).
+
+**Tolerância:** diferenças de até **R$ 0,02**, inclusive, entre o valor informado e o valor calculado são aceitas por imposto; acima disso, é registrada uma divergência.
+
+## Como executar
+
+**Windows:**
+```
+.\mvnw.cmd clean test
+.\mvnw.cmd spring-boot:run
+```
+
+**Linux/macOS:**
+```
+./mvnw clean test
+./mvnw spring-boot:run
+```
+
+A aplicação sobe em: **http://localhost:8080**
+
+Não é necessária nenhuma dependência externa (banco de dados, containers, etc.) para executar ou avaliar o projeto: a aplicação utiliza **H2 em memória**, criado automaticamente na inicialização.
+
+## Usuários de teste
+
+As senhas abaixo são cadastradas automaticamente na inicialização (`DataInitializer`) e armazenadas com **BCrypt**.
+
+| Perfil | E-mail | Senha |
+| :--- | :--- | :--- |
+| Admin | `admin@erpvarejo.com` | `Admin@123` |
+| Operador 01 | `caixa01@erpvarejo.com` | `User@123` |
+| Operador 02 | `caixa02@erpvarejo.com` | `User@123` |
+
+## Login
+
+`POST /api/auth/login`
+
+**Exemplo de requisição:**
+```json
+{
+  "email": "caixa01@erpvarejo.com",
+  "senha": "User@123"
+}
+```
+
+**Exemplo de resposta (200 OK):**
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjYWl4YTAxQGVy...",
+  "tipo": "Bearer",
+  "usuario": "caixa01@erpvarejo.com"
+}
+```
+
+## Validação fiscal
+
+`POST /api/fiscal/validar-nota`
+
+**Header obrigatório:**
+```
+Authorization: Bearer <TOKEN>
+```
+
+**Exemplo completo — PROD-001 (resultado APROVADA):**
+
+Requisição:
+```json
+{
+  "numeroNota": "NF-1001",
+  "ufOrigem": "PR",
+  "ufDestino": "RJ",
+  "itens": [
+    {
+      "codigoProduto": "PROD-001",
+      "nome": "Mouse USB Optico",
+      "categoria": "ELETRONICOS",
+      "quantidade": 1,
+      "valorUnitario": 10.00,
+      "desconto": 0.00,
+      "impostosInformados": {
+        "icms": 1.20,
+        "pis": 0.17,
+        "cofins": 0.76
+      }
+    }
+  ]
+}
+```
+
+Resposta (200 OK):
+```json
+{
+  "numeroNota": "NF-1001",
+  "status": "APROVADA",
+  "valorTotalNota": 10.00,
+  "totalImpostosCalculados": 2.13,
+  "divergencias": []
+}
+```
+
+**Exemplo resumido — PROD-004 (resultado DIVERGENTE):**
+
+Item enviado com ICMS informado de R$ 16,20 (base R$ 90,00, PR ➔ RJ). Resposta:
+```json
+{
+  "numeroNota": "NF-1002",
+  "status": "DIVERGENTE",
+  "valorTotalNota": 90.00,
+  "totalImpostosCalculados": 19.13,
+  "divergencias": [
+    {
+      "codigoProduto": "PROD-004",
+      "imposto": "ICMS",
+      "valorInformado": 16.20,
+      "valorCorreto": 10.80,
+      "mensagem": "Divergência de ICMS: Operação interestadual (PR -> RJ) deve aplicar 12% sobre a base R$ 90,00."
+    }
+  ]
+}
+```
+
+## Swagger
+
+URL: **http://localhost:8080/swagger-ui/index.html**
+
+Passo a passo para testar o endpoint protegido pela interface:
+
+1. execute o login em `POST /api/auth/login`;
+2. copie o valor de `token` da resposta;
+3. clique em **Authorize**;
+4. informe apenas o token puro (sem o prefixo `Bearer`, que já é adicionado automaticamente pelo esquema `bearerAuth` configurado);
+5. chame o endpoint `POST /api/fiscal/validar-nota`.
+
+## H2 Console
+
+URL: **http://localhost:8080/h2-console**
+
+- **JDBC URL:** `jdbc:h2:mem:erpvarejo`
+- **User:** `sa`
+- **Password:** *(vazio)*
+
+## Testes
+
+Ao final da execução de `.\mvnw.cmd clean test` (ou `./mvnw clean test`), a suíte roda **29 testes**, todos passando.
+
+Cobertura:
+
+- regras de ICMS (operação interna, interestadual, isenção de `CESTA_BASICA`, comparação de UF sem diferenciar caixa);
+- regras de PIS (alíquota padrão e zeragem para `BEBIDAS_ALCOOLICAS`);
+- regras de COFINS (alíquota padrão e zeragem para `BEBIDAS_ALCOOLICAS`);
+- tolerância de R$ 0,02 (diferença aceita no limite e divergência acima do limite);
+- os seis produtos oficiais do desafio (PROD-001 a PROD-006);
+- autenticação (login válido e senha incorreta);
+- endpoint fiscal protegido (sem token, com token válido, payloads inválidos);
+- payloads inválidos (nota sem itens, categoria inexistente, desconto maior que o valor bruto, JSON malformado).
+
+## Decisões técnicas
+
+- **`BigDecimal`** é usado em todos os cálculos monetários para evitar a imprecisão de ponto flutuante inerente a `double`/`float`.
+- **`RoundingMode.HALF_UP`** foi adotado como padrão de arredondamento monetário, por ser o comportamento mais previsível e comum em arredondamento fiscal.
+- **JWT** mantém a API stateless, sem necessidade de sessão no servidor.
+- **H2 em memória** foi escolhido entre as opções permitidas pelo desafio (H2 ou banco externo via Docker) por facilitar a execução e a avaliação do projeto sem exigir nenhuma dependência externa.
+- **Strategy** (`CalculadoraImposto`) desacopla a regra de cada imposto do serviço de validação, facilitando testes isolados e a inclusão de novos impostos.
+
+## Limitações
+
+- As regras fiscais implementadas são **simplificadas** e seguem exclusivamente o que foi especificado no enunciado deste desafio.
+- Elas **não representam** a legislação tributária brasileira em sua totalidade (substituição tributária, regimes especiais, benefícios estaduais, etc. não são tratados).
+- O banco **H2 é recriado a cada reinicialização** da aplicação (`ddl-auto=create-drop`); nenhum dado persiste entre execuções.
+- O **segredo JWT padrão** (definido em `application.properties`) é apenas para desenvolvimento local e não deve ser usado em produção.
+
+## Variável de ambiente JWT_SECRET
+
+A aplicação lê o segredo do JWT da variável de ambiente `JWT_SECRET`:
+
+```properties
+jwt.secret=${JWT_SECRET:erp-varejo-chave-secreta-jwt-com-no-minimo-32-caracteres}
+```
+
+- deve ter **pelo menos 32 caracteres** (requisito do algoritmo HMAC usado pela biblioteca JJWT);
+- se `JWT_SECRET` não for definida, é usado um valor padrão local, **que não deve ser usado em produção**.
+
+---
+
+# Desafio Técnico: Módulo Fiscal & ERP Varejo
 
 Bem-vindo(a) ao desafio técnico para a vaga de **Desenvolvedor(a) Java / Spring**!
 
