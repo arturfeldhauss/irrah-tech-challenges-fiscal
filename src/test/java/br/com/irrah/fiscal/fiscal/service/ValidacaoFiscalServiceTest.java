@@ -77,6 +77,54 @@ public class ValidacaoFiscalServiceTest {
     }
 
     @Test
+    void prod002DeveRetornarAprovadaSemDivergencias() {
+        ValidarNotaRequest request = new ValidarNotaRequest(
+                "NF-1001",
+                "PR",
+                "PR",
+                List.of(item(
+                        "PROD-002",
+                        CategoriaProduto.CESTA_BASICA,
+                        new BigDecimal("2"),
+                        new BigDecimal("8.00"),
+                        new BigDecimal("1.00"),
+                        new BigDecimal("0.00"),
+                        new BigDecimal("0.25"),
+                        new BigDecimal("1.14")
+                ))
+        );
+
+        ValidacaoNotaResponse resposta = service.validar(request);
+
+        assertEquals(StatusValidacao.APROVADA, resposta.status());
+        assertTrue(resposta.divergencias().isEmpty());
+    }
+
+    @Test
+    void prod003DeveRetornarAprovadaSemDivergencias() {
+        ValidarNotaRequest request = new ValidarNotaRequest(
+                "NF-1001",
+                "PR",
+                "PR",
+                List.of(item(
+                        "PROD-003",
+                        CategoriaProduto.BEBIDAS_ALCOOLICAS,
+                        new BigDecimal("5"),
+                        new BigDecimal("12.00"),
+                        new BigDecimal("0.00"),
+                        new BigDecimal("10.80"),
+                        new BigDecimal("0.00"),
+                        new BigDecimal("0.00")
+                ))
+        );
+
+        ValidacaoNotaResponse resposta = service.validar(request);
+
+        assertEquals(StatusValidacao.APROVADA, resposta.status());
+        assertTrue(resposta.divergencias().isEmpty());
+    }
+
+    @Test
     void prod004DeveRetornarDivergenteComDivergenciaDeIcms() {
         ValidarNotaRequest request = new ValidarNotaRequest(
                 "NF-1002",
